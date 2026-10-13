@@ -1,0 +1,7 @@
+# Configuração do Hadolint (lint de Dockerfiles)
+ignored:
+  # Fixar versões no "apk add" quebra o build quando o Alpine remove versões antigas
+  # do repositório. A reprodutibilidade vem da tag da imagem base (alpine:3.24) e o
+  # scan do Trivy na pipeline garante que os pacotes instalados não têm CVEs conhecidas.
+  - DL3018
+failure-threshold: warning

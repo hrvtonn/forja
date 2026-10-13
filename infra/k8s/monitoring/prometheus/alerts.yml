@@ -1,0 +1,66 @@
+# Regras de alerta compartilhadas entre Docker Compose e Kubernetes.
+# Baseadas nas métricas expostas pelas APIs (prom-client) em /metrics.
+groups:
+  - name: devops-api.availability
+    rules:
+      - alert: ApiInstanceDown
+        expr: up{job=~"contratos|flash-sales|flash-sales-export"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Instância {{ $labels.instance }} de {{ $labels.job }} está fora do ar"
+          description: "O Prometheus não consegue coletar métricas há mais de 1 minuto."
+
+      - alert: ApiHighErrorRate
+        expr: |
+          sum by (job) (rate(http_request_duration_ms_count{status_code=~"5.."}[5m]))
+            /
+          sum by (job) (rate(http_request_duration_ms_count[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} com mais de 5% de respostas 5xx"
+          description: "Taxa de erro atual: {{ $value | humanizePercentage }}."
+
+  - name: devops-api.performance
+    rules:
+      - alert: ApiHighLatencyP95
+        expr: |
+          histogram_quantile(0.95,
+            sum by (job, le) (rate(http_request_duration_ms_bucket{route!="/metrics"}[5m]))
+          ) > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Latência p95 de {{ $labels.job }} acima de 1s"
+          description: "p95 atual: {{ $value | humanize }} ms."
+
+      - alert: NodeEventLoopBlocked
+        expr: max by (job, instance) (nodejs_eventloop_lag_p99_seconds) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Event loop de {{ $labels.instance }} ({{ $labels.job }}) bloqueado"
+          description: "Lag p99 de {{ $value | humanizeDuration }}; requisições CPU-bound estão travando o processo."
+
+      - alert: ApiHighMemoryUsage
+        expr: process_resident_memory_bytes{job=~"contratos|flash-sales|flash-sales-export"} > 450 * 1024 * 1024
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} ({{ $labels.job }}) usando {{ $value | humanize1024 }}B de memória"
+
+  - name: devops-api.business
+    rules:
+      - alert: FlashSaleSoldOutSpike
+        expr: sum(rate(http_request_duration_ms_count{job="flash-sales",status_code="409"}[5m])) > 5
+        for: 2m
+        labels:
+          severity: info
+        annotations:
+          summary: "Muitas tentativas de compra sem estoque (409) no Flash Sales"

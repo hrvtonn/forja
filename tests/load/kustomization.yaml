@@ -1,0 +1,14 @@
+# kubectl apply -k tests/load  (ver "make k8s-load-test")
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring
+
+resources:
+  - k6-job.yaml
+
+configMapGenerator:
+  - name: k6-scripts
+    files:
+      - flash-sale-spike.js
+      - export-bulkhead.js

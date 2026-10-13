@@ -1,0 +1,257 @@
+# Ambiente completo para desenvolvimento/homologação local.
+#   cp .env.example .env && docker compose up -d --build
+#
+# Redes segmentadas:
+#   edge       -> gateway <-> APIs (única porta pública: o gateway)
+#   data       -> APIs <-> Postgres/Redis (interna, sem acesso externo)
+#   monitoring -> Prometheus/Grafana <-> APIs
+
+name: devops-api
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+x-api-healthcheck: &api-healthcheck
+  test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/health"]
+  interval: 10s
+  timeout: 3s
+  retries: 5
+  start_period: 15s
+
+x-contratos-env: &contratos-env
+  NODE_ENV: production
+  PORT: "3000"
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_USER: contratos_app
+  DB_PASSWORD: ${CONTRATOS_DB_PASSWORD:?defina CONTRATOS_DB_PASSWORD no .env}
+  DB_NAME: contracts_db
+  DB_SYNCHRONIZE: "false"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_PASSWORD: ${REDIS_PASSWORD:?defina REDIS_PASSWORD no .env}
+
+x-flash-sales-env: &flash-sales-env
+  NODE_ENV: production
+  PORT: "3000"
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_USER: flash_sales_app
+  DB_PASSWORD: ${FLASH_SALES_DB_PASSWORD:?defina FLASH_SALES_DB_PASSWORD no .env}
+  DB_NAME: flash_sales
+  DB_SYNCHRONIZE: "false"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_PASSWORD: ${REDIS_PASSWORD:?defina REDIS_PASSWORD no .env}
+
+x-contratos-build: &contratos-build
+  build:
+    context: ./Contratos
+  image: devops-api/contratos:local
+
+x-flash-sales-build: &flash-sales-build
+  build:
+    context: ./Flash Sales
+  image: devops-api/flash-sales:local
+
+services:
+  # ------------------------------------------------------------------ dados
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      CONTRATOS_DB_PASSWORD: ${CONTRATOS_DB_PASSWORD}
+      FLASH_SALES_DB_PASSWORD: ${FLASH_SALES_DB_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./infra/k8s/base/postgres/init-databases.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -h 127.0.0.1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [data]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+    logging: *logging
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?defina REDIS_PASSWORD no .env}
+    # AOF habilitado: o estoque de ingressos sobrevive a reinicializações
+    command: ["sh", "-c", 'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", 'redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [data]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+    logging: *logging
+
+  # ------------------------------------------------------- migrações (one-shot)
+  contratos-migrate:
+    <<: [*contratos-build, *hardening]
+    command: ["node", "dist/scripts/migrate.js"]
+    environment: *contratos-env
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [data]
+    restart: "no"
+    logging: *logging
+
+  flash-sales-migrate:
+    <<: [*flash-sales-build, *hardening]
+    command: ["node", "dist/scripts/migrate.js"]
+    environment: *flash-sales-env
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [data]
+    restart: "no"
+    logging: *logging
+
+  # ------------------------------------------------------------------- APIs
+  contratos:
+    <<: [*contratos-build, *hardening]
+    restart: unless-stopped
+    environment: *contratos-env
+    healthcheck: *api-healthcheck
+    depends_on:
+      contratos-migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    networks: [edge, data, monitoring]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+    logging: *logging
+
+  flash-sales:
+    <<: [*flash-sales-build, *hardening]
+    restart: unless-stopped
+    environment: *flash-sales-env
+    healthcheck: *api-healthcheck
+    depends_on:
+      flash-sales-migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    networks: [edge, data, monitoring]
+    deploy:
+      replicas: 2
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+    logging: *logging
+
+  # Mesma imagem do flash-sales, dedicada ao relatório CPU/memória intensivo
+  # (bulkhead: um export pesado não derruba o checkout)
+  flash-sales-export:
+    <<: [*flash-sales-build, *hardening]
+    restart: unless-stopped
+    environment:
+      <<: *flash-sales-env
+      NODE_OPTIONS: --max-old-space-size=384
+    healthcheck:
+      <<: *api-healthcheck
+      timeout: 10s
+    depends_on:
+      flash-sales-migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    networks: [edge, data, monitoring]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+    logging: *logging
+
+  # ---------------------------------------------------------------- borda
+  gateway:
+    image: nginxinc/nginx-unprivileged:1.29-alpine
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      contratos: { condition: service_healthy }
+      flash-sales: { condition: service_healthy }
+      flash-sales-export: { condition: service_healthy }
+    networks: [edge]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 128M }
+    logging: *logging
+
+  # -------------------------------------------------------- observabilidade
+  prometheus:
+    image: prom/prometheus:v3.7.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./infra/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/k8s/monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    networks: [monitoring]
+    logging: *logging
+
+  grafana:
+    image: grafana/grafana:12.2.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?defina GRAFANA_ADMIN_PASSWORD no .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/api-overview.json
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - ./infra/k8s/monitoring/grafana/provisioning/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./infra/k8s/monitoring/grafana/provisioning/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./infra/k8s/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on: [prometheus]
+    networks: [monitoring]
+    logging: *logging
+
+networks:
+  edge:
+  data:
+    internal: true
+  monitoring:
+
+volumes:
+  postgres-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:

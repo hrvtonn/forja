@@ -1,0 +1,40 @@
+# Stack de observabilidade (Prometheus + Grafana) no namespace "monitoring".
+# Os arquivos alerts.yml e o dashboard são os mesmos usados pelo Docker Compose.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: devops-api-monitoring
+      app.kubernetes.io/managed-by: kustomize
+
+resources:
+  - namespace.yaml
+  - prometheus/prometheus.yaml
+  - grafana/grafana.yaml
+
+configMapGenerator:
+  - name: prometheus-config
+    files:
+      - prometheus/prometheus.yml
+  - name: prometheus-rules
+    files:
+      - prometheus/alerts.yml
+  - name: grafana-datasources
+    files:
+      - grafana/provisioning/datasources.yml
+  - name: grafana-dashboard-providers
+    files:
+      - grafana/provisioning/dashboards.yml
+  - name: grafana-dashboards
+    files:
+      - grafana/dashboards/api-overview.json
+
+secretGenerator:
+  # Credencial de desenvolvimento; em produção, substitua por um segredo externo
+  - name: grafana-admin
+    literals:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=dev-grafana

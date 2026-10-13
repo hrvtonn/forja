@@ -1,0 +1,49 @@
+# Ambiente de desenvolvimento (cluster kind provisionado pelo Terraform).
+# Imagens construídas localmente e carregadas no kind com "kind load docker-image".
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Necessário para que os segredos gerados aqui fiquem no mesmo namespace da base
+namespace: devops-api
+
+resources:
+  - ../../base
+
+labels:
+  - pairs:
+      environment: dev
+
+images:
+  - name: contratos
+    newName: devops-api/contratos
+    newTag: local
+  - name: flash-sales
+    newName: devops-api/flash-sales
+    newTag: local
+
+# Segredos de desenvolvimento (valores sem valor real). O sufixo de hash gerado pelo
+# Kustomize força o rollout dos pods sempre que um segredo muda.
+secretGenerator:
+  - name: postgres-credentials
+    envs:
+      - secrets/postgres.env
+  - name: redis-credentials
+    envs:
+      - secrets/redis.env
+
+patches:
+  # Ambiente local com poucos recursos: HPA começa com 1 réplica
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: contratos|flash-sales
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: contratos|flash-sales
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1

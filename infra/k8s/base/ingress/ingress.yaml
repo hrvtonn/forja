@@ -1,0 +1,75 @@
+# Apenas as rotas de negócio e de health são publicadas.
+# /metrics e /ready ficam acessíveis somente dentro do cluster.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: contratos
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: "devops-api-strip-contratos@kubernetescrd,devops-api-rate-limit-api@kubernetescrd,devops-api-body-limit@kubernetescrd,devops-api-security-headers@kubernetescrd"
+spec:
+  ingressClassName: traefik
+  rules:
+    - http:
+        paths:
+          - path: /contratos/contracts
+            pathType: Exact
+            backend:
+              service:
+                name: contratos
+                port:
+                  name: http
+          - path: /contratos/health
+            pathType: Exact
+            backend:
+              service:
+                name: contratos
+                port:
+                  name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: flash-sales
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: "devops-api-strip-flash-sales@kubernetescrd,devops-api-rate-limit-api@kubernetescrd,devops-api-body-limit@kubernetescrd,devops-api-security-headers@kubernetescrd"
+spec:
+  ingressClassName: traefik
+  rules:
+    - http:
+        paths:
+          - path: /flash-sales/checkout
+            pathType: Exact
+            backend:
+              service:
+                name: flash-sales
+                port:
+                  name: http
+          - path: /flash-sales/health
+            pathType: Exact
+            backend:
+              service:
+                name: flash-sales
+                port:
+                  name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: flash-sales-export
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: "devops-api-strip-flash-sales@kubernetescrd,devops-api-rate-limit-export@kubernetescrd,devops-api-body-limit@kubernetescrd,devops-api-security-headers@kubernetescrd"
+spec:
+  ingressClassName: traefik
+  rules:
+    - http:
+        paths:
+          - path: /flash-sales/tickets/export
+            pathType: Exact
+            backend:
+              service:
+                name: flash-sales-export
+                port:
+                  name: http

@@ -1,0 +1,17 @@
+# Dependências e builds
+node_modules/
+dist/
+coverage/
+*.log
+
+# Segredos locais (nunca versionar)
+.env
+infra/k8s/overlays/prod/secrets/*.env
+
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/kubeconfig
+infra/terraform/*.tfvars
+!infra/terraform/*.tfvars.example

@@ -1,0 +1,53 @@
+# Executa o teste de carga de dentro do cluster (namespace monitoring, liberado pelas
+# NetworkPolicies), atingindo os Services diretamente: valida HPA e bulkhead sem
+# passar pelo rate limit do ingress.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-load-test
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: k6-load-test
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 12345
+        runAsGroup: 12345
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: k6
+          image: grafana/k6:1.3.0
+          args: ["run", "/scripts/export-bulkhead.js"]
+          env:
+            - name: EXPORT_URL
+              value: http://flash-sales-export.devops-api/tickets/export
+            - name: CHECKOUT_URL
+              value: http://flash-sales.devops-api/checkout
+            - name: EVENT_ID
+              value: show-2026
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: scripts
+          configMap:
+            name: k6-scripts

@@ -1,0 +1,122 @@
+# Bulkhead: mesma imagem do flash-sales, porém em um pool dedicado que atende
+# apenas POST /tickets/export (CPU/memória intensivo e bloqueante do event loop).
+# Assim um relatório pesado não degrada o checkout, e cada pool escala de forma independente.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flash-sales-export
+  labels:
+    app.kubernetes.io/name: flash-sales-export
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flash-sales-export
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: flash-sales-export
+        app.kubernetes.io/component: worker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: /metrics
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60 # permite concluir um relatório em andamento
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: flash-sales
+          ports:
+            - name: http
+              containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: flash-sales-config
+          env:
+            - name: NODE_OPTIONS
+              value: --max-old-space-size=384
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: FLASH_SALES_DB_PASSWORD
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-credentials
+                  key: REDIS_PASSWORD
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          # Tolerante: o export bloqueia o event loop por alguns segundos de propósito
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 6
+          # Readiness também tolerante: se o pod saísse do Service a cada export, as
+          # requisições falhariam (connection refused) e o HPA ignoraria sua CPU
+          # (pods "unready" não entram no cálculo), impedindo o autoscaling.
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 6
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flash-sales-export
+  labels:
+    app.kubernetes.io/name: flash-sales-export
+    app.kubernetes.io/component: worker
+spec:
+  selector:
+    app.kubernetes.io/name: flash-sales-export
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

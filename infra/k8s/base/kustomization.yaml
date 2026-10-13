@@ -1,0 +1,55 @@
+# Base comum a todos os ambientes. Segredos e imagens são definidos nos overlays.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: devops-api
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: devops-api
+      app.kubernetes.io/managed-by: kustomize
+
+resources:
+  - namespace.yaml
+  - network-policies.yaml
+  - postgres/statefulset.yaml
+  - redis/statefulset.yaml
+  - contratos/deployment.yaml
+  - contratos/service.yaml
+  - contratos/autoscaling.yaml
+  - flash-sales/deployment.yaml
+  - flash-sales/service.yaml
+  - flash-sales/export-deployment.yaml
+  - flash-sales/autoscaling.yaml
+  - ingress/middlewares.yaml
+  - ingress/ingress.yaml
+
+configMapGenerator:
+  # Mesmo script usado pelo Docker Compose (fonte única)
+  - name: postgres-init
+    files:
+      - 10-init-databases.sh=postgres/init-databases.sh
+
+  - name: contratos-config
+    literals:
+      - NODE_ENV=production
+      - PORT=3000
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=contratos_app
+      - DB_NAME=contracts_db
+      - DB_SYNCHRONIZE=false
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+
+  - name: flash-sales-config
+    literals:
+      - NODE_ENV=production
+      - PORT=3000
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=flash_sales_app
+      - DB_NAME=flash_sales
+      - DB_SYNCHRONIZE=false
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379

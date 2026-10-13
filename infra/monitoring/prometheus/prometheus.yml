@@ -1,0 +1,34 @@
+# Configuração do Prometheus para o ambiente Docker Compose.
+# dns_sd_configs descobre todas as réplicas de cada serviço (inclusive com --scale).
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: contratos
+    dns_sd_configs:
+      - names: ["contratos"]
+        type: A
+        port: 3000
+        refresh_interval: 10s
+
+  - job_name: flash-sales
+    dns_sd_configs:
+      - names: ["flash-sales"]
+        type: A
+        port: 3000
+        refresh_interval: 10s
+
+  - job_name: flash-sales-export
+    dns_sd_configs:
+      - names: ["flash-sales-export"]
+        type: A
+        port: 3000
+        refresh_interval: 10s

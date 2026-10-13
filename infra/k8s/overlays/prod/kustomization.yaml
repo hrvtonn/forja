@@ -1,0 +1,66 @@
+# Ambiente de produção. A pipeline de CD atualiza as tags das imagens
+# (kustomize edit set image) com o SHA do commit e gera os arquivos de segredo
+# a partir dos GitHub Secrets — nada sensível é versionado.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Necessário para que os segredos gerados aqui fiquem no mesmo namespace da base
+namespace: devops-api
+
+resources:
+  - ../../base
+
+labels:
+  - pairs:
+      environment: prod
+
+images:
+  - name: contratos
+    newName: ghcr.io/your-org/devops-api-contratos
+    newTag: latest
+  - name: flash-sales
+    newName: ghcr.io/your-org/devops-api-flash-sales
+    newTag: latest
+
+secretGenerator:
+  - name: postgres-credentials
+    envs:
+      - secrets/postgres.env
+  - name: redis-credentials
+    envs:
+      - secrets/redis.env
+
+patches:
+  # Mais capacidade para o pico de vendas
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: flash-sales
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 3
+      - op: replace
+        path: /spec/maxReplicas
+        value: 20
+  - target:
+      kind: Deployment
+      name: flash-sales
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+  # Volumes maiores para os dados
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |-
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 20Gi
+  - target:
+      kind: StatefulSet
+      name: redis
+    patch: |-
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 5Gi
