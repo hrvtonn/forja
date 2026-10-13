@@ -203,9 +203,12 @@ jobs:
 
       - name: Instalar kind CLI (carregar imagens locais no cluster)
         run: |
-          curl -sSLo /usr/local/bin/kind https://kind.sigs.k8s.io/dl/v0.31.0/kind-linux-amd64
-          chmod +x /usr/local/bin/kind
-          kind load docker-image devops-api/contratos:local devops-api/flash-sales:local --name devops-api
+          # Diretório próprio: /usr/local/bin do runner pertence ao root
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -sSLo "$RUNNER_TEMP/bin/kind" https://kind.sigs.k8s.io/dl/v0.31.0/kind-linux-amd64
+          chmod +x "$RUNNER_TEMP/bin/kind"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/kind" load docker-image devops-api/contratos:local devops-api/flash-sales:local --name devops-api
 
       - name: Deploy (Kustomize overlay dev)
         run: make k8s-deploy
