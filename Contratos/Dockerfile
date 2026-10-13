@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # ---------- Estágio 1: build (dependências de desenvolvimento + compilação TS) ----------
-FROM node:24-alpine3.24 AS build
+FROM node:26-alpine3.24 AS build
 WORKDIR /app
 
 COPY package.json package-lock.json ./
